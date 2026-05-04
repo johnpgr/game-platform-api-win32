@@ -54,13 +54,12 @@ static GLuint create_program(void) {
         "    gl_Position = vec4(p, 0.0, 1.0);\n"
         "    v_color = in_color * (0.72 + u_pulse * 0.28);\n"
         "}\n";
-    static const char* fragment_shader =
-        "#version 330 core\n"
-        "in vec3 v_color;\n"
-        "out vec4 out_color;\n"
-        "void main(void) {\n"
-        "    out_color = vec4(v_color, 1.0);\n"
-        "}\n";
+    static const char* fragment_shader = "#version 330 core\n"
+                                         "in vec3 v_color;\n"
+                                         "out vec4 out_color;\n"
+                                         "void main(void) {\n"
+                                         "    out_color = vec4(v_color, 1.0);\n"
+                                         "}\n";
 
     GLuint vs      = compile_shader(GL_VERTEX_SHADER, vertex_shader);
     GLuint fs      = compile_shader(GL_FRAGMENT_SHADER, fragment_shader);
@@ -98,9 +97,21 @@ static GLuint create_program(void) {
 
 static int create_modern_gl(GLContext* gl) {
     static const GLfloat vertices[] = {
-        -0.50f, -0.42f, 1.00f, 0.20f, 0.10f,
-         0.50f, -0.42f, 0.10f, 0.80f, 1.00f,
-         0.00f,  0.50f, 0.95f, 0.85f, 0.18f,
+        -0.50f,
+        -0.42f,
+        1.00f,
+        0.20f,
+        0.10f,
+        0.50f,
+        -0.42f,
+        0.10f,
+        0.80f,
+        1.00f,
+        0.00f,
+        0.50f,
+        0.95f,
+        0.85f,
+        0.18f,
     };
 
     gl->program = create_program();
@@ -153,13 +164,6 @@ static void destroy_modern_gl(GLContext* gl) {
 }
 
 int main(int argc, char** argv) {
-    GLContext gl    = { 0 };
-    f32 offset_x   = 0.0f;
-    f32 offset_y   = 0.0f;
-    f32 pulse      = 0.5f;
-    i32 interactive = argc > 1;
-    i32 frame       = 0;
-
     (void)argv;
 
     api.window.size.x        = 960;
@@ -175,6 +179,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    GLContext gl    = {0};
+    f32 offset_x    = 0.0f;
+    f32 offset_y    = 0.0f;
+    f32 pulse       = 0.5f;
+    i32 interactive = argc > 1;
+    i32 frame       = 0;
+
     if(!create_modern_gl(&gl)) {
         fprintf(stderr, "modern OpenGL setup failed\n");
         destroy_modern_gl(&gl);
@@ -189,7 +200,9 @@ int main(int argc, char** argv) {
         api.window.size.y
     );
     printf("Uses VAO/VBO, GLSL shaders, uniforms, and glDrawArrays.\n");
-    printf("WASD/arrows move the triangle, wheel changes pulse, Escape quits.\n");
+    printf(
+        "WASD/arrows move the triangle, wheel changes pulse, Escape quits.\n"
+    );
     if(!interactive)
         printf(
             "Running smoke mode for 240 frames. Pass any argument for "

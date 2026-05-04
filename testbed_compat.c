@@ -20,10 +20,6 @@ typedef struct Player {
 PlatformApi api;
 
 int main(int argc, char** argv) {
-    Player player  = { 500.0f, 375.0f, 32.0f };
-    i32 interactive = argc > 1;
-    i32 frame       = 0;
-
     (void)argv;
 
     api.window.size.x        = 1000;
@@ -50,6 +46,11 @@ int main(int argc, char** argv) {
         "glOrtho, glBegin, glVertex2i.\n"
     );
     printf("WASD/arrows move the square, wheel scales it, Escape quits.\n");
+
+    Player player  = { 500.0f, 375.0f, 32.0f };
+    i32 interactive = argc > 1;
+    i32 frame       = 0;
+
     if(!interactive)
         printf(
             "Running smoke mode for 240 frames. Pass any argument for "
