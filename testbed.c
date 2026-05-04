@@ -215,7 +215,7 @@ int main(int argc, char** argv) {
 
         platform_update();
 
-        if(api.keys[PLATFORM_KEY_ESCAPE].went_down)
+        if(api.keys[PLATFORM_KEY_ESCAPE].is_pressed)
             platform_request_quit();
 
         dt    = api.time.now.seconds_delta;

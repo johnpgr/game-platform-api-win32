@@ -72,9 +72,11 @@ typedef struct TimeInfo {
 } TimeInfo;
 
 typedef struct Button {
-    b32 is_down;   /* OUT */
-    b32 went_down; /* OUT */
-    b32 went_up;   /* OUT */
+    b32 is_pressed;        /* OUT */
+    b32 is_pressed_repeat; /* OUT */
+    b32 is_down;           /* OUT */
+    b32 is_released;       /* OUT */
+    b32 is_up;             /* OUT */
 } Button;
 
 enum {
@@ -169,11 +171,13 @@ typedef struct PlatformApi {
 
     struct {
         Point size;        /* INOUT client size; 0,0 uses default */
-        b32 fullscreen;    /* INIT reserved */
+        b32 fullscreen;    /* INOUT */
         const char* title; /* INIT */
         Point position;    /* OUT screen coordinates */
         b32 forbid_resize; /* INIT */
         b32 focused;       /* OUT */
+        f32 dpi;           /* OUT */
+        f32 content_scale; /* OUT */
     } window;
 
     struct {
@@ -256,6 +260,16 @@ PLATFORM_API const char* platform_error(void);
 #define PLATFORM_GLAPI
 #endif
 #endif
+
+#if defined(PLATFORM_NO_GL_LOADER)
+#define PLATFORM_GL_LOADER_ENABLED 0
+#elif defined(__gl_h_) || defined(__GL_H__) || defined(__glew_h__) || defined(__GLES_H__) || defined(__glad_h_) || defined(GLAD_GL_H_) || defined(GLAD_H_) || defined(GL_VERSION_1_0)
+#define PLATFORM_GL_LOADER_ENABLED 0
+#else
+#define PLATFORM_GL_LOADER_ENABLED 1
+#endif
+
+#if PLATFORM_GL_LOADER_ENABLED
 
 /* OpenGL 1.0-4.6 compatibility declarations generated from glad/gl-compat.h. */
 #define GL_2D 0x0600
@@ -5601,6 +5615,8 @@ PLATFORM_API PFNGLWINDOWPOS3SPROC platform_glWindowPos3s;
 PLATFORM_API PFNGLWINDOWPOS3SVPROC platform_glWindowPos3sv;
 #define glWindowPos3sv platform_glWindowPos3sv
 
+#endif /* PLATFORM_GL_LOADER_ENABLED */
+
 #ifdef __cplusplus
 }
 #endif
@@ -5622,6 +5638,7 @@ extern "C" {
 #endif
 
 static void* platform_get_gl_address(const char* name);
+static void platform_update_window_metrics(void);
 
 #if !defined(_WIN32)
 #error platform.h implementation currently supports Windows only.
@@ -5630,6 +5647,36 @@ static void* platform_get_gl_address(const char* name);
 #define PLATFORM_STDCALL __stdcall
 #define PLATFORM_CALLBACK __stdcall
 
+#if defined(_WINDOWS_) || defined(_INC_WINDOWS)
+#define PLATFORM_WIN32_SDK_INCLUDED 1
+#else
+#define PLATFORM_WIN32_SDK_INCLUDED 0
+#endif
+
+#if PLATFORM_WIN32_SDK_INCLUDED
+typedef HMODULE platform_handle;
+typedef HWND platform_hwnd;
+typedef HDC platform_hdc;
+typedef HGLRC platform_hglrc;
+typedef HINSTANCE platform_hinstance;
+typedef LRESULT PlatformLResult;
+typedef WPARAM platform_wparam;
+typedef LPARAM platform_lparam;
+typedef DWORD platform_dword;
+typedef UINT platform_uint;
+typedef WORD platform_word;
+typedef BYTE platform_byte;
+typedef LONG platform_long;
+typedef UINT_PTR platform_uintptr;
+typedef POINT PlatformWinPoint;
+typedef RECT PlatformWinRect;
+typedef MSG PlatformMsg;
+typedef WNDCLASSEXA PlatformWndClassEx;
+typedef PIXELFORMATDESCRIPTOR PlatformPixelFormat;
+typedef LARGE_INTEGER PlatformQPCLargeInteger;
+typedef WINDOWPLACEMENT PlatformWindowPlacement;
+typedef MONITORINFO PlatformMonitorInfo;
+#else
 typedef void* platform_handle;
 typedef void* platform_hwnd;
 typedef void* platform_hdc;
@@ -5700,6 +5747,23 @@ typedef struct PlatformQPCLargeInteger {
     int64_t QuadPart;
 } PlatformQPCLargeInteger;
 
+typedef struct PlatformWindowPlacement {
+    platform_uint length;
+    platform_uint flags;
+    platform_uint showCmd;
+    PlatformWinPoint ptMinPosition;
+    PlatformWinPoint ptMaxPosition;
+    PlatformWinRect rcNormalPosition;
+} PlatformWindowPlacement;
+
+typedef struct PlatformMonitorInfo {
+    platform_dword cbSize;
+    PlatformWinRect rcMonitor;
+    PlatformWinRect rcWork;
+    platform_dword dwFlags;
+} PlatformMonitorInfo;
+#endif
+
 typedef struct PlatformXInputGamepad {
     platform_word wButtons;
     platform_byte bLeftTrigger;
@@ -5715,12 +5779,15 @@ typedef struct PlatformXInputState {
     PlatformXInputGamepad Gamepad;
 } PlatformXInputState;
 
+#if !PLATFORM_WIN32_SDK_INCLUDED
 __declspec(dllimport) platform_handle PLATFORM_STDCALL LoadLibraryA(const char*);
 __declspec(dllimport) int PLATFORM_STDCALL FreeLibrary(platform_handle);
 __declspec(dllimport) void* PLATFORM_STDCALL GetProcAddress(platform_handle, const char*);
 __declspec(dllimport) platform_hinstance PLATFORM_STDCALL GetModuleHandleA(const char*);
+__declspec(dllimport) platform_dword PLATFORM_STDCALL GetLastError(void);
 __declspec(dllimport) int PLATFORM_STDCALL QueryPerformanceCounter(PlatformQPCLargeInteger*);
 __declspec(dllimport) int PLATFORM_STDCALL QueryPerformanceFrequency(PlatformQPCLargeInteger*);
+#endif
 
 #define PLATFORM_WM_DESTROY 0x0002
 #define PLATFORM_WM_CLOSE 0x0010
@@ -5741,6 +5808,7 @@ __declspec(dllimport) int PLATFORM_STDCALL QueryPerformanceFrequency(PlatformQPC
 #define PLATFORM_WM_SYSKEYDOWN 0x0104
 #define PLATFORM_WM_SYSKEYUP 0x0105
 #define PLATFORM_WM_CHAR 0x0102
+#define PLATFORM_WM_DPICHANGED 0x02E0
 
 #define PLATFORM_PM_REMOVE 0x0001
 #define PLATFORM_SW_SHOW 5
@@ -5755,9 +5823,17 @@ __declspec(dllimport) int PLATFORM_STDCALL QueryPerformanceFrequency(PlatformQPC
 #define PLATFORM_WS_MAXIMIZEBOX 0x00010000L
 #define PLATFORM_WS_VISIBLE 0x10000000L
 #define PLATFORM_CW_USEDEFAULT ((int)0x80000000)
+#define PLATFORM_GWL_STYLE (-16)
+#define PLATFORM_SWP_NOSIZE 0x0001
+#define PLATFORM_SWP_NOMOVE 0x0002
+#define PLATFORM_SWP_NOZORDER 0x0004
+#define PLATFORM_SWP_NOOWNERZORDER 0x0200
+#define PLATFORM_SWP_FRAMECHANGED 0x0020
+#define PLATFORM_MONITOR_DEFAULTTOPRIMARY 0x00000001
 #define PLATFORM_PFD_DRAW_TO_WINDOW 0x00000004
 #define PLATFORM_PFD_SUPPORT_OPENGL 0x00000020
-#define PLATFORM_PFD_u64BUFFER 0x00000001
+#define PLATFORM_PFD_DOUBLEBUFFER 0x00000001
+#define PLATFORM_PFD_u64BUFFER PLATFORM_PFD_DOUBLEBUFFER
 #define PLATFORM_PFD_TYPE_RGBA 0
 #define PLATFORM_PFD_MAIN_PLANE 0
 #define PlatformXInputGamepad_DPAD_UP 0x0001
@@ -5773,6 +5849,7 @@ __declspec(dllimport) int PLATFORM_STDCALL QueryPerformanceFrequency(PlatformQPC
 #define PlatformXInputGamepad_X 0x4000
 #define PlatformXInputGamepad_Y 0x8000
 #define PLATFORM_ERROR_SUCCESS 0L
+#define PLATFORM_ERROR_CLASS_ALREADY_EXISTS 1410L
 
 typedef unsigned short platform_atom;
 typedef platform_atom(PLATFORM_STDCALL* platform_RegisterClassExA_proc)(const PlatformWndClassEx*);
@@ -5794,6 +5871,17 @@ typedef platform_hdc(PLATFORM_STDCALL* platform_GetDC_proc)(platform_hwnd);
 typedef int(PLATFORM_STDCALL* platform_ReleaseDC_proc)(platform_hwnd, platform_hdc);
 typedef int(PLATFORM_STDCALL* platform_SetCapture_proc)(platform_hwnd);
 typedef int(PLATFORM_STDCALL* platform_ReleaseCapture_proc)(void);
+typedef int(PLATFORM_STDCALL* platform_SetWindowPos_proc)(platform_hwnd, platform_hwnd, int, int, int, int, platform_uint);
+typedef platform_long(PLATFORM_STDCALL* platform_GetWindowLongA_proc)(platform_hwnd, int);
+typedef platform_long(PLATFORM_STDCALL* platform_SetWindowLongA_proc)(platform_hwnd, int, platform_long);
+typedef int(PLATFORM_STDCALL* platform_GetWindowPlacement_proc)(platform_hwnd, PlatformWindowPlacement*);
+typedef int(PLATFORM_STDCALL* platform_SetWindowPlacement_proc)(platform_hwnd, const PlatformWindowPlacement*);
+typedef platform_handle(PLATFORM_STDCALL* platform_MonitorFromWindow_proc)(platform_hwnd, platform_dword);
+typedef int(PLATFORM_STDCALL* platform_GetMonitorInfoA_proc)(platform_handle, PlatformMonitorInfo*);
+typedef int(PLATFORM_STDCALL* platform_SetProcessDPIAware_proc)(void);
+typedef int(PLATFORM_STDCALL* platform_SetProcessDpiAwarenessContext_proc)(void*);
+typedef platform_uint(PLATFORM_STDCALL* platform_GetDpiForWindow_proc)(platform_hwnd);
+typedef long(PLATFORM_STDCALL* platform_SetProcessDpiAwareness_proc)(int);
 
 typedef int(PLATFORM_STDCALL* platform_ChoosePixelFormat_proc)(platform_hdc, const PlatformPixelFormat*);
 typedef int(PLATFORM_STDCALL* platform_SetPixelFormat_proc)(platform_hdc, int, const PlatformPixelFormat*);
@@ -5803,6 +5891,7 @@ typedef platform_hglrc(PLATFORM_STDCALL* platform_wglCreateContext_proc)(platfor
 typedef int(PLATFORM_STDCALL* platform_wglMakeCurrent_proc)(platform_hdc, platform_hglrc);
 typedef int(PLATFORM_STDCALL* platform_wglDeleteContext_proc)(platform_hglrc);
 typedef void*(PLATFORM_STDCALL* platform_wglGetProcAddress_proc)(const char*);
+typedef int(PLATFORM_STDCALL* platform_wglChoosePixelFormatARB_proc)(platform_hdc, const int*, const float*, platform_uint, int*, platform_uint*);
 typedef platform_hglrc(PLATFORM_STDCALL* platform_wglCreateContextAttribsARB_proc)(platform_hdc, platform_hglrc, const int*);
 
 typedef unsigned int(PLATFORM_STDCALL* platform_XInputGetState_proc)(platform_dword, PlatformXInputState*);
@@ -5816,14 +5905,24 @@ typedef int(PLATFORM_STDCALL* platform_wglSwapIntervalEXT_proc)(int);
 #define PLATFORM_WGL_CONTEXT_DEBUG_BIT_ARB 0x0001
 #define PLATFORM_WGL_CONTEXT_CORE_PROFILE_BIT_ARB 0x00000001
 #define PLATFORM_WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x00000002
+#define PLATFORM_WGL_DRAW_TO_WINDOW_ARB 0x2001
+#define PLATFORM_WGL_SUPPORT_OPENGL_ARB 0x2010
+#define PLATFORM_WGL_DOUBLE_BUFFER_ARB 0x2011
+#define PLATFORM_WGL_PIXEL_TYPE_ARB 0x2013
+#define PLATFORM_WGL_COLOR_BITS_ARB 0x2014
+#define PLATFORM_WGL_DEPTH_BITS_ARB 0x2022
+#define PLATFORM_WGL_STENCIL_BITS_ARB 0x2023
+#define PLATFORM_WGL_TYPE_RGBA_ARB 0x202B
 
 static struct {
     PlatformApi* api;
-    platform_handle user32, gdi32, opengl32, winmm, xinput;
+    platform_handle user32, gdi32, opengl32, winmm, xinput, shcore;
     platform_hinstance instance;
     platform_hwnd hwnd;
     platform_hdc hdc;
     platform_hglrc glrc;
+    PlatformWindowPlacement windowed_placement;
+    platform_dword windowed_style;
     PlatformQPCLargeInteger qpc_frequency, qpc_last;
     char error[256];
     platform_RegisterClassExA_proc RegisterClassExA;
@@ -5845,6 +5944,17 @@ static struct {
     platform_ReleaseDC_proc ReleaseDC;
     platform_SetCapture_proc SetCapture;
     platform_ReleaseCapture_proc ReleaseCapture;
+    platform_SetWindowPos_proc SetWindowPos;
+    platform_GetWindowLongA_proc GetWindowLongA;
+    platform_SetWindowLongA_proc SetWindowLongA;
+    platform_GetWindowPlacement_proc GetWindowPlacement;
+    platform_SetWindowPlacement_proc SetWindowPlacement;
+    platform_MonitorFromWindow_proc MonitorFromWindow;
+    platform_GetMonitorInfoA_proc GetMonitorInfoA;
+    platform_SetProcessDPIAware_proc SetProcessDPIAware;
+    platform_SetProcessDpiAwarenessContext_proc SetProcessDpiAwarenessContext;
+    platform_GetDpiForWindow_proc GetDpiForWindow;
+    platform_SetProcessDpiAwareness_proc SetProcessDpiAwareness;
     platform_ChoosePixelFormat_proc ChoosePixelFormat;
     platform_SetPixelFormat_proc SetPixelFormat;
     platform_SwapBuffers_proc SwapBuffers;
@@ -5852,12 +5962,14 @@ static struct {
     platform_wglMakeCurrent_proc wglMakeCurrent;
     platform_wglDeleteContext_proc wglDeleteContext;
     platform_wglGetProcAddress_proc wglGetProcAddress;
+    platform_wglChoosePixelFormatARB_proc wglChoosePixelFormatARB;
     platform_wglCreateContextAttribsARB_proc wglCreateContextAttribsARB;
     platform_wglSwapIntervalEXT_proc wglSwapIntervalEXT;
     platform_XInputGetState_proc XInputGetState;
     platform_timeBeginPeriod_proc timeBeginPeriod;
     int initialized;
     int typing_count;
+    int fullscreen_active;
 } platform_win32;
 
 #define platform (*platform_win32.api)
@@ -5871,7 +5983,18 @@ static void platform_set_error(const char* text) {
 }
 
 static void* platform_load_proc(platform_handle dll, const char* name) {
+#if PLATFORM_WIN32_SDK_INCLUDED
+    union {
+        FARPROC proc;
+        void* ptr;
+    } loaded;
+    loaded.ptr = 0;
+    if(dll)
+        loaded.proc = GetProcAddress(dll, name);
+    return loaded.ptr;
+#else
     return dll ? GetProcAddress(dll, name) : 0;
+#endif
 }
 
 static int platform_load_libraries(void) {
@@ -5879,6 +6002,7 @@ static int platform_load_libraries(void) {
     platform_win32.gdi32    = LoadLibraryA("gdi32.dll");
     platform_win32.opengl32 = LoadLibraryA("opengl32.dll");
     platform_win32.winmm    = LoadLibraryA("winmm.dll");
+    platform_win32.shcore   = LoadLibraryA("shcore.dll");
     platform_win32.xinput   = LoadLibraryA("xinput1_4.dll");
     if(!platform_win32.xinput)
         platform_win32.xinput = LoadLibraryA("xinput9_1_0.dll");
@@ -5917,6 +6041,13 @@ static int platform_load_libraries(void) {
     PLATFORM_LOAD(user32, ReleaseDC);
     PLATFORM_LOAD(user32, SetCapture);
     PLATFORM_LOAD(user32, ReleaseCapture);
+    PLATFORM_LOAD(user32, SetWindowPos);
+    PLATFORM_LOAD(user32, GetWindowLongA);
+    PLATFORM_LOAD(user32, SetWindowLongA);
+    PLATFORM_LOAD(user32, GetWindowPlacement);
+    PLATFORM_LOAD(user32, SetWindowPlacement);
+    PLATFORM_LOAD(user32, MonitorFromWindow);
+    PLATFORM_LOAD(user32, GetMonitorInfoA);
     PLATFORM_LOAD(gdi32, ChoosePixelFormat);
     PLATFORM_LOAD(gdi32, SetPixelFormat);
     PLATFORM_LOAD(gdi32, SwapBuffers);
@@ -5926,6 +6057,11 @@ static int platform_load_libraries(void) {
     PLATFORM_LOAD(opengl32, wglGetProcAddress);
 #undef PLATFORM_LOAD
 
+    platform_win32.SetProcessDpiAwarenessContext = (platform_SetProcessDpiAwarenessContext_proc)platform_load_proc(platform_win32.user32, "SetProcessDpiAwarenessContext");
+    platform_win32.GetDpiForWindow = (platform_GetDpiForWindow_proc)platform_load_proc(platform_win32.user32, "GetDpiForWindow");
+    platform_win32.SetProcessDPIAware = (platform_SetProcessDPIAware_proc)platform_load_proc(platform_win32.user32, "SetProcessDPIAware");
+    if(platform_win32.shcore)
+        platform_win32.SetProcessDpiAwareness = (platform_SetProcessDpiAwareness_proc)platform_load_proc(platform_win32.shcore, "SetProcessDpiAwareness");
     if(platform_win32.xinput)
         platform_win32.XInputGetState = (platform_XInputGetState_proc)platform_load_proc(platform_win32.xinput, "XInputGetState");
     if(platform_win32.winmm) {
@@ -5934,6 +6070,189 @@ static int platform_load_libraries(void) {
             platform_win32.timeBeginPeriod(1);
     }
     return 1;
+}
+
+static void platform_set_dpi_awareness(void) {
+    if(platform_win32.SetProcessDpiAwarenessContext) {
+        platform_win32.SetProcessDpiAwarenessContext((void*)-4);
+    } else if(platform_win32.SetProcessDpiAwareness) {
+        platform_win32.SetProcessDpiAwareness(2);
+    } else if(platform_win32.SetProcessDPIAware) {
+        platform_win32.SetProcessDPIAware();
+    }
+}
+
+static void platform_update_dpi(void) {
+    platform_uint dpi = 96;
+    if(platform_win32.hwnd && platform_win32.GetDpiForWindow)
+        dpi = platform_win32.GetDpiForWindow(platform_win32.hwnd);
+    if(dpi == 0)
+        dpi = 96;
+    platform.window.dpi = (f32)dpi;
+    platform.window.content_scale = (f32)dpi / 96.0f;
+}
+
+static void platform_fill_pixel_format(PlatformPixelFormat* pfd) {
+    memset(pfd, 0, sizeof(*pfd));
+    pfd->nSize        = sizeof(*pfd);
+    pfd->nVersion     = 1;
+    pfd->dwFlags      = PLATFORM_PFD_DRAW_TO_WINDOW | PLATFORM_PFD_SUPPORT_OPENGL | PLATFORM_PFD_DOUBLEBUFFER;
+    pfd->iPixelType   = PLATFORM_PFD_TYPE_RGBA;
+    pfd->cColorBits   = 32;
+    pfd->cDepthBits   = 24;
+    pfd->cStencilBits = 8;
+    pfd->iLayerType   = PLATFORM_PFD_MAIN_PLANE;
+}
+
+static int platform_set_window_pixel_format(platform_hdc hdc) {
+    PlatformPixelFormat pfd;
+    int pf = 0;
+    platform_fill_pixel_format(&pfd);
+    if(platform_win32.wglChoosePixelFormatARB) {
+        int attribs[] = {
+            PLATFORM_WGL_DRAW_TO_WINDOW_ARB, 1,
+            PLATFORM_WGL_SUPPORT_OPENGL_ARB, 1,
+            PLATFORM_WGL_DOUBLE_BUFFER_ARB, 1,
+            PLATFORM_WGL_PIXEL_TYPE_ARB, PLATFORM_WGL_TYPE_RGBA_ARB,
+            PLATFORM_WGL_COLOR_BITS_ARB, 32,
+            PLATFORM_WGL_DEPTH_BITS_ARB, 24,
+            PLATFORM_WGL_STENCIL_BITS_ARB, 8,
+            0
+        };
+        platform_uint count = 0;
+        if(!platform_win32.wglChoosePixelFormatARB(hdc, attribs, 0, 1, &pf, &count) || count == 0)
+            pf = 0;
+    }
+    if(!pf)
+        pf = platform_win32.ChoosePixelFormat(hdc, &pfd);
+    return pf && platform_win32.SetPixelFormat(hdc, pf, &pfd);
+}
+
+static int platform_load_wgl_extensions(const char* class_name) {
+    platform_hwnd hwnd = 0;
+    platform_hdc hdc = 0;
+    platform_hglrc glrc = 0;
+    int ok = 0;
+
+    hwnd = platform_win32.CreateWindowExA(0, class_name, "platform_wgl_bootstrap", 0, 0, 0, 1, 1, 0, 0, platform_win32.instance, 0);
+    if(!hwnd)
+        goto cleanup;
+    hdc = platform_win32.GetDC(hwnd);
+    if(!hdc)
+        goto cleanup;
+    if(!platform_set_window_pixel_format(hdc))
+        goto cleanup;
+    glrc = platform_win32.wglCreateContext(hdc);
+    if(!glrc || !platform_win32.wglMakeCurrent(hdc, glrc))
+        goto cleanup;
+
+    platform_win32.wglChoosePixelFormatARB = (platform_wglChoosePixelFormatARB_proc)platform_win32.wglGetProcAddress("wglChoosePixelFormatARB");
+    platform_win32.wglCreateContextAttribsARB = (platform_wglCreateContextAttribsARB_proc)platform_win32.wglGetProcAddress("wglCreateContextAttribsARB");
+    platform_win32.wglSwapIntervalEXT = (platform_wglSwapIntervalEXT_proc)platform_win32.wglGetProcAddress("wglSwapIntervalEXT");
+    ok = 1;
+
+cleanup:
+    if(glrc) {
+        platform_win32.wglMakeCurrent(0, 0);
+        platform_win32.wglDeleteContext(glrc);
+    }
+    if(hwnd && hdc)
+        platform_win32.ReleaseDC(hwnd, hdc);
+    if(hwnd)
+        platform_win32.DestroyWindow(hwnd);
+    return ok;
+}
+
+static int platform_create_gl_context(void) {
+    platform_hglrc glrc = 0;
+    if(platform.opengl.major > 0) {
+        int attribs[11];
+        int n = 0;
+        attribs[n++] = PLATFORM_WGL_CONTEXT_MAJOR_VERSION_ARB;
+        attribs[n++] = platform.opengl.major;
+        attribs[n++] = PLATFORM_WGL_CONTEXT_MINOR_VERSION_ARB;
+        attribs[n++] = platform.opengl.minor;
+        if(platform.opengl.major > 3 || (platform.opengl.major == 3 && platform.opengl.minor >= 2)) {
+            attribs[n++] = PLATFORM_WGL_CONTEXT_PROFILE_MASK_ARB;
+            attribs[n++] = platform.opengl.compatibility ? PLATFORM_WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB : PLATFORM_WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
+        }
+        if(platform.opengl.debug_context) {
+            attribs[n++] = PLATFORM_WGL_CONTEXT_FLAGS_ARB;
+            attribs[n++] = PLATFORM_WGL_CONTEXT_DEBUG_BIT_ARB;
+        }
+        attribs[n++] = 0;
+
+        if(!platform_win32.wglCreateContextAttribsARB) {
+            platform_set_error(
+                "requested OpenGL version, but wglCreateContextAttribsARB is "
+                "unavailable"
+            );
+            return 0;
+        }
+        glrc = platform_win32.wglCreateContextAttribsARB(platform_win32.hdc, 0, attribs);
+        if(!glrc) {
+            platform_set_error("failed to create requested OpenGL context");
+            return 0;
+        }
+    } else {
+        glrc = platform_win32.wglCreateContext(platform_win32.hdc);
+        if(!glrc) {
+            platform_set_error("failed to create OpenGL context");
+            return 0;
+        }
+    }
+
+    platform_win32.glrc = glrc;
+    if(!platform_win32.wglMakeCurrent(platform_win32.hdc, platform_win32.glrc)) {
+        platform_set_error("failed to activate OpenGL context");
+        return 0;
+    }
+    return 1;
+}
+
+static void platform_set_fullscreen_state(b32 fullscreen) {
+    platform_dword style;
+    PlatformMonitorInfo monitor_info;
+    if(!platform_win32.hwnd)
+        return;
+    if((fullscreen ? 1 : 0) == platform_win32.fullscreen_active) {
+        platform.window.fullscreen = fullscreen ? 1 : 0;
+        return;
+    }
+
+    style = (platform_dword)platform_win32.GetWindowLongA(platform_win32.hwnd, PLATFORM_GWL_STYLE);
+    if(fullscreen) {
+        platform_handle monitor;
+        memset(&platform_win32.windowed_placement, 0, sizeof(platform_win32.windowed_placement));
+        platform_win32.windowed_placement.length = sizeof(platform_win32.windowed_placement);
+        platform_win32.GetWindowPlacement(platform_win32.hwnd, &platform_win32.windowed_placement);
+        platform_win32.windowed_style = style;
+
+        memset(&monitor_info, 0, sizeof(monitor_info));
+        monitor_info.cbSize = sizeof(monitor_info);
+        monitor = platform_win32.MonitorFromWindow(platform_win32.hwnd, PLATFORM_MONITOR_DEFAULTTOPRIMARY);
+        if(platform_win32.GetMonitorInfoA(monitor, &monitor_info)) {
+            platform_win32.SetWindowLongA(platform_win32.hwnd, PLATFORM_GWL_STYLE, (platform_long)(style & ~PLATFORM_WS_OVERLAPPEDWINDOW));
+            platform_win32.SetWindowPos(platform_win32.hwnd, 0,
+                                        monitor_info.rcMonitor.left,
+                                        monitor_info.rcMonitor.top,
+                                        monitor_info.rcMonitor.right - monitor_info.rcMonitor.left,
+                                        monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top,
+                                        PLATFORM_SWP_NOOWNERZORDER | PLATFORM_SWP_FRAMECHANGED);
+            platform_win32.fullscreen_active = 1;
+        }
+    } else {
+        platform_dword restore_style = platform_win32.windowed_style ? platform_win32.windowed_style : (style | PLATFORM_WS_OVERLAPPEDWINDOW);
+        platform_win32.SetWindowLongA(platform_win32.hwnd, PLATFORM_GWL_STYLE, (platform_long)restore_style);
+        if(platform_win32.windowed_placement.length == sizeof(platform_win32.windowed_placement))
+            platform_win32.SetWindowPlacement(platform_win32.hwnd, &platform_win32.windowed_placement);
+        platform_win32.SetWindowPos(platform_win32.hwnd, 0, 0, 0, 0, 0,
+                                    PLATFORM_SWP_NOMOVE | PLATFORM_SWP_NOSIZE | PLATFORM_SWP_NOZORDER |
+                                    PLATFORM_SWP_NOOWNERZORDER | PLATFORM_SWP_FRAMECHANGED);
+        platform_win32.fullscreen_active = 0;
+    }
+    platform.window.fullscreen = platform_win32.fullscreen_active ? 1 : 0;
+    platform_update_window_metrics();
 }
 
 static int platform_key_from_vk(platform_wparam vk) {
@@ -5993,10 +6312,16 @@ static int platform_key_from_vk(platform_wparam vk) {
 static void platform_set_button(Button* button, int is_down) {
     b32 down = is_down ? 1u : 0u;
     if(button->is_down != down) {
-        button->went_down |= down;
-        button->went_up |= !down;
+        button->is_pressed |= down;
+        button->is_released |= !down;
         button->is_down = down;
     }
+    button->is_up = !button->is_down;
+}
+
+static void platform_set_button_repeat(Button* button) {
+    if(button->is_down)
+        button->is_pressed_repeat = 1;
 }
 
 static void platform_set_key(platform_wparam vk, int is_down) {
@@ -6008,11 +6333,37 @@ static void platform_set_key(platform_wparam vk, int is_down) {
     }
 }
 
+static void platform_set_key_repeat(platform_wparam vk) {
+    int key = platform_key_from_vk(vk);
+    if(key >= 0 && key < PLATFORM_KEY_COUNT) {
+        platform_set_button_repeat(&platform.keys[key]);
+        if(key >= 'a' && key <= 'z')
+            platform_set_button_repeat(&platform.keys[key - 32]);
+    }
+}
+
+static void platform_release_pressed_input(void) {
+    int i;
+    for(i = 0; i < PLATFORM_KEY_COUNT; ++i)
+        platform_set_button(&platform.keys[i], 0);
+    for(i = 0; i < PLATFORM_MOUSE_COUNT; ++i)
+        platform_set_button(&platform.mouse.buttons[i], 0);
+    platform_set_button(&platform.mouse.left, 0);
+    platform_set_button(&platform.mouse.middle, 0);
+    platform_set_button(&platform.mouse.right, 0);
+    platform.input.shift = 0;
+    platform.input.control = 0;
+    platform.input.alt = 0;
+    if(platform_win32.ReleaseCapture)
+        platform_win32.ReleaseCapture();
+}
+
 static void platform_update_window_metrics(void) {
     PlatformWinRect rect;
     PlatformWinPoint pt;
     if(!platform_win32.hwnd)
         return;
+    platform_update_dpi();
     if(platform_win32.GetClientRect(platform_win32.hwnd, &rect)) {
         platform.window.size.x = rect.right - rect.left;
         platform.window.size.y = rect.bottom - rect.top;
@@ -6031,21 +6382,44 @@ static PlatformLResult PLATFORM_CALLBACK platform_wndproc(platform_hwnd hwnd, pl
     switch(msg) {
         case PLATFORM_WM_CLOSE:
         case PLATFORM_WM_DESTROY:
-            platform.quit = 1;
-            platform_win32.PostQuitMessage(0);
+            if(hwnd == platform_win32.hwnd) {
+                platform.quit = 1;
+                platform_win32.PostQuitMessage(0);
+            }
             return 0;
         case PLATFORM_WM_SETFOCUS:
             platform.window.focused = 1;
             return 0;
         case PLATFORM_WM_KILLFOCUS:
             platform.window.focused = 0;
+            platform_release_pressed_input();
             return 0;
+        case PLATFORM_WM_DPICHANGED: {
+            PlatformWinRect* suggested = (PlatformWinRect*)lp;
+            platform_uint dpi = (platform_uint)(wp & 0xffffu);
+            if(dpi == 0)
+                dpi = 96;
+            platform.window.dpi = (f32)dpi;
+            platform.window.content_scale = (f32)dpi / 96.0f;
+            if(suggested) {
+                platform_win32.SetWindowPos(hwnd, 0,
+                                            suggested->left,
+                                            suggested->top,
+                                            suggested->right - suggested->left,
+                                            suggested->bottom - suggested->top,
+                                            PLATFORM_SWP_NOZORDER | PLATFORM_SWP_NOOWNERZORDER);
+            }
+            platform_update_window_metrics();
+            return 0;
+        }
         case PLATFORM_WM_SIZE:
             platform_update_window_metrics();
             return 0;
         case PLATFORM_WM_KEYDOWN:
         case PLATFORM_WM_SYSKEYDOWN:
             platform_set_key(wp, 1);
+            if(lp & (1u << 30))
+                platform_set_key_repeat(wp);
             return 0;
         case PLATFORM_WM_KEYUP:
         case PLATFORM_WM_SYSKEYUP:
@@ -6093,21 +6467,36 @@ static PlatformLResult PLATFORM_CALLBACK platform_wndproc(platform_hwnd hwnd, pl
 static void platform_reset_frame_transitions(void) {
     int i;
     for(i = 0; i < PLATFORM_KEY_COUNT; ++i) {
-        platform.keys[i].went_down = 0;
-        platform.keys[i].went_up   = 0;
+        platform.keys[i].is_pressed = 0;
+        platform.keys[i].is_pressed_repeat = 0;
+        platform.keys[i].is_released = 0;
+        platform.keys[i].is_up = !platform.keys[i].is_down;
     }
     for(i = 0; i < PLATFORM_MOUSE_COUNT; ++i) {
-        platform.mouse.buttons[i].went_down = 0;
-        platform.mouse.buttons[i].went_up   = 0;
+        platform.mouse.buttons[i].is_pressed = 0;
+        platform.mouse.buttons[i].is_pressed_repeat = 0;
+        platform.mouse.buttons[i].is_released = 0;
+        platform.mouse.buttons[i].is_up = !platform.mouse.buttons[i].is_down;
     }
-    platform.mouse.left.went_down = platform.mouse.left.went_up = 0;
-    platform.mouse.middle.went_down = platform.mouse.middle.went_up = 0;
-    platform.mouse.right.went_down = platform.mouse.right.went_up = 0;
+    platform.mouse.left.is_pressed = 0;
+    platform.mouse.left.is_pressed_repeat = 0;
+    platform.mouse.left.is_released = 0;
+    platform.mouse.left.is_up = !platform.mouse.left.is_down;
+    platform.mouse.middle.is_pressed = 0;
+    platform.mouse.middle.is_pressed_repeat = 0;
+    platform.mouse.middle.is_released = 0;
+    platform.mouse.middle.is_up = !platform.mouse.middle.is_down;
+    platform.mouse.right.is_pressed = 0;
+    platform.mouse.right.is_pressed_repeat = 0;
+    platform.mouse.right.is_released = 0;
+    platform.mouse.right.is_up = !platform.mouse.right.is_down;
     for(i = 0; i < 4; ++i) {
         int b;
         for(b = 0; b < PLATFORM_GAMEPAD_COUNT; ++b) {
-            platform.gamepads[i].buttons[b].went_down = 0;
-            platform.gamepads[i].buttons[b].went_up   = 0;
+            platform.gamepads[i].buttons[b].is_pressed = 0;
+            platform.gamepads[i].buttons[b].is_pressed_repeat = 0;
+            platform.gamepads[i].buttons[b].is_released = 0;
+            platform.gamepads[i].buttons[b].is_up = !platform.gamepads[i].buttons[b].is_down;
         }
     }
     platform.mouse.delta_position.x = platform.mouse.delta_position.y = 0;
@@ -6125,6 +6514,8 @@ static void* platform_get_gl_address(const char* name) {
         p = platform_load_proc(platform_win32.opengl32, name);
     return p;
 }
+
+#if PLATFORM_GL_LOADER_ENABLED
 
 typedef void (*platform_gl_apiproc)(void);
 static platform_gl_apiproc platform_gl_on_demand_loader(const char* name) {
@@ -12443,6 +12834,14 @@ static void platform_load_gl(void) {
     platform_win32.wglSwapIntervalEXT = (platform_wglSwapIntervalEXT_proc)platform_get_gl_address("wglSwapIntervalEXT");
 }
 
+#else
+
+static void platform_load_gl(void) {
+    platform_win32.wglSwapIntervalEXT = (platform_wglSwapIntervalEXT_proc)platform_get_gl_address("wglSwapIntervalEXT");
+}
+
+#endif /* PLATFORM_GL_LOADER_ENABLED */
+
 static f32 platform_process_stick(short sx, short sy, f32 deadzone, f32* out_x, f32* out_y) {
     f32 x   = (sx < 0) ? (f32)sx / 32768.0f : (f32)sx / 32767.0f;
     f32 y   = (sy < 0) ? (f32)sy / 32768.0f : (f32)sy / 32767.0f;
@@ -12459,8 +12858,24 @@ static f32 platform_process_stick(short sx, short sy, f32 deadzone, f32* out_x, 
     return mag;
 }
 
+static void platform_clear_gamepad_analog(GamepadState* g) {
+    g->left_trigger = 0;
+    g->right_trigger = 0;
+    g->left_stick.raw.x = 0;
+    g->left_stick.raw.y = 0;
+    g->left_stick.value.x = 0;
+    g->left_stick.value.y = 0;
+    g->left_stick.magnitude = 0;
+    g->right_stick.raw.x = 0;
+    g->right_stick.raw.y = 0;
+    g->right_stick.value.x = 0;
+    g->right_stick.value.y = 0;
+    g->right_stick.magnitude = 0;
+}
+
 static void platform_update_gamepads(void) {
     int i;
+    b32 any_connected = 0;
     static const struct {
         int index;
         platform_word mask;
@@ -12485,6 +12900,7 @@ static void platform_update_gamepads(void) {
         if(platform_win32.XInputGetState && platform_win32.XInputGetState((platform_dword)i, &state) == PLATFORM_ERROR_SUCCESS) {
             int j;
             g->connected = 1;
+            any_connected = 1;
             for(j = 0; j < (int)(sizeof(map) / sizeof(map[0])); ++j)
                 platform_set_button(&g->buttons[map[j].index], (state.Gamepad.wButtons & map[j].mask) != 0);
             g->left_trigger          = state.Gamepad.bLeftTrigger / 255.0f;
@@ -12501,7 +12917,20 @@ static void platform_update_gamepads(void) {
             g->connected = 0;
             for(b = 0; b < PLATFORM_GAMEPAD_COUNT; ++b)
                 platform_set_button(&g->buttons[b], 0);
+            platform_clear_gamepad_analog(g);
         }
+    }
+    if(!any_connected) {
+        int b;
+        platform.extra.gamepad.connected = 0;
+        for(b = 0; b < PLATFORM_GAMEPAD_COUNT; ++b) {
+            platform.extra.gamepad.buttons[b].is_down = 0;
+            platform.extra.gamepad.buttons[b].is_pressed = 0;
+            platform.extra.gamepad.buttons[b].is_pressed_repeat = 0;
+            platform.extra.gamepad.buttons[b].is_released = 0;
+            platform.extra.gamepad.buttons[b].is_up = 1;
+        }
+        platform_clear_gamepad_analog(&platform.extra.gamepad);
     }
 }
 
@@ -12526,6 +12955,8 @@ static void platform_update_time(void) {
     platform.time.clamped = platform.time.now;
     if(platform.time.clamped_max_seconds_delta > 0 && platform.time.clamped.seconds_delta > platform.time.clamped_max_seconds_delta)
         platform.time.clamped.seconds_delta = platform.time.clamped_max_seconds_delta;
+    platform.time.clamped.ns_delta = (u64)((f64)platform.time.clamped.seconds_delta * 1000000000.0);
+    platform.time.clamped.ms_delta = platform.time.clamped.ns_delta / 1000000ULL;
 
     if(!platform.time.paused) {
         platform.time.pausable.seconds_delta = platform.time.clamped.seconds_delta;
@@ -12544,14 +12975,13 @@ static void platform_update_time(void) {
 PLATFORM_API int platform_init(PlatformApi* api) {
     PlatformWndClassEx wc;
     PlatformWinRect rect;
-    PlatformPixelFormat pfd;
-    int pf;
     const char* title = "platform";
     int width = 1280, height = 720;
     platform_dword style = PLATFORM_WS_OVERLAPPEDWINDOW;
     PlatformQPCLargeInteger start, end;
     Point requested_window_size  = {0, 0};
     const char* requested_title  = 0;
+    b32 requested_fullscreen     = 0;
     b32 requested_forbid_resize  = 0;
     Point requested_draw_size    = {0, 0};
     b32 requested_draw_pixelate  = 0;
@@ -12572,6 +13002,7 @@ PLATFORM_API int platform_init(PlatformApi* api) {
 
     requested_window_size    = api->window.size;
     requested_title          = api->window.title;
+    requested_fullscreen     = api->window.fullscreen;
     requested_forbid_resize  = api->window.forbid_resize;
     requested_draw_size      = api->draw.size;
     requested_draw_pixelate  = api->draw.pixelate;
@@ -12600,7 +13031,10 @@ PLATFORM_API int platform_init(PlatformApi* api) {
     platform.window.size.x        = width;
     platform.window.size.y        = height;
     platform.window.title         = title;
+    platform.window.fullscreen    = requested_fullscreen ? 1 : 0;
     platform.window.forbid_resize = requested_forbid_resize;
+    platform.window.dpi           = 96.0f;
+    platform.window.content_scale = 1.0f;
     platform.draw.size            = requested_draw_size;
     if(platform.draw.size.x <= 0 || platform.draw.size.y <= 0)
         platform.draw.size = platform.window.size;
@@ -12624,8 +13058,11 @@ PLATFORM_API int platform_init(PlatformApi* api) {
         platform.gamepads[i].right_stick.deadzone_outer = 1.0f;
     }
 
-    if(!platform_load_libraries())
+    if(!platform_load_libraries()) {
+        platform_shutdown();
         return 0;
+    }
+    platform_set_dpi_awareness();
     platform_win32.instance = GetModuleHandleA(0);
 
     memset(&wc, 0, sizeof(wc));
@@ -12634,10 +13071,12 @@ PLATFORM_API int platform_init(PlatformApi* api) {
     wc.lpfnWndProc   = platform_wndproc;
     wc.hInstance     = platform_win32.instance;
     wc.lpszClassName = "platform_window_class";
-    if(!platform_win32.RegisterClassExA(&wc)) {
+    if(!platform_win32.RegisterClassExA(&wc) && GetLastError() != PLATFORM_ERROR_CLASS_ALREADY_EXISTS) {
         platform_set_error("RegisterClassExA failed");
+        platform_shutdown();
         return 0;
     }
+    platform_load_wgl_extensions(wc.lpszClassName);
 
     if(platform.window.forbid_resize)
         style &= ~(PLATFORM_WS_THICKFRAME | PLATFORM_WS_MAXIMIZEBOX);
@@ -12649,80 +13088,36 @@ PLATFORM_API int platform_init(PlatformApi* api) {
     platform_win32.hwnd = platform_win32.CreateWindowExA(0, wc.lpszClassName, title, style | PLATFORM_WS_VISIBLE, PLATFORM_CW_USEDEFAULT, PLATFORM_CW_USEDEFAULT, rect.right - rect.left, rect.bottom - rect.top, 0, 0, platform_win32.instance, 0);
     if(!platform_win32.hwnd) {
         platform_set_error("CreateWindowExA failed");
+        platform_shutdown();
         return 0;
     }
 
     platform_win32.hdc = platform_win32.GetDC(platform_win32.hwnd);
-    memset(&pfd, 0, sizeof(pfd));
-    pfd.nSize        = sizeof(pfd);
-    pfd.nVersion     = 1;
-    pfd.dwFlags      = PLATFORM_PFD_DRAW_TO_WINDOW | PLATFORM_PFD_SUPPORT_OPENGL | PLATFORM_PFD_u64BUFFER;
-    pfd.iPixelType   = PLATFORM_PFD_TYPE_RGBA;
-    pfd.cColorBits   = 32;
-    pfd.cDepthBits   = 24;
-    pfd.cStencilBits = 8;
-    pfd.iLayerType   = PLATFORM_PFD_MAIN_PLANE;
-    pf               = platform_win32.ChoosePixelFormat(platform_win32.hdc, &pfd);
-    if(!pf || !platform_win32.SetPixelFormat(platform_win32.hdc, pf, &pfd)) {
+    if(!platform_win32.hdc) {
+        platform_set_error("GetDC failed");
+        platform_shutdown();
+        return 0;
+    }
+    if(!platform_set_window_pixel_format(platform_win32.hdc)) {
         platform_set_error("failed to set OpenGL pixel format");
+        platform_shutdown();
         return 0;
     }
-    platform_win32.glrc = platform_win32.wglCreateContext(platform_win32.hdc);
-    if(!platform_win32.glrc || !platform_win32.wglMakeCurrent(platform_win32.hdc, platform_win32.glrc)) {
-        platform_set_error("failed to create OpenGL context");
+    if(!platform_create_gl_context()) {
+        platform_shutdown();
         return 0;
-    }
-
-    platform_win32.wglCreateContextAttribsARB = (platform_wglCreateContextAttribsARB_proc)platform_win32.wglGetProcAddress("wglCreateContextAttribsARB");
-    if(platform.opengl.major > 0) {
-        int attribs[11];
-        int n = 0;
-        platform_hglrc modern_glrc;
-        attribs[n++] = PLATFORM_WGL_CONTEXT_MAJOR_VERSION_ARB;
-        attribs[n++] = platform.opengl.major;
-        attribs[n++] = PLATFORM_WGL_CONTEXT_MINOR_VERSION_ARB;
-        attribs[n++] = platform.opengl.minor;
-        if(platform.opengl.major > 3 || (platform.opengl.major == 3 && platform.opengl.minor >= 2)) {
-            attribs[n++] = PLATFORM_WGL_CONTEXT_PROFILE_MASK_ARB;
-            attribs[n++] = platform.opengl.compatibility ? PLATFORM_WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB : PLATFORM_WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
-        }
-        if(platform.opengl.debug_context) {
-            attribs[n++] = PLATFORM_WGL_CONTEXT_FLAGS_ARB;
-            attribs[n++] = PLATFORM_WGL_CONTEXT_DEBUG_BIT_ARB;
-        }
-        attribs[n++] = 0;
-
-        if(!platform_win32.wglCreateContextAttribsARB) {
-            platform_set_error(
-                "requested OpenGL version, but wglCreateContextAttribsARB is "
-                "unavailable"
-            );
-            return 0;
-        }
-
-        modern_glrc = platform_win32.wglCreateContextAttribsARB(platform_win32.hdc, 0, attribs);
-        if(!modern_glrc) {
-            platform_set_error("failed to create requested OpenGL context");
-            return 0;
-        }
-
-        platform_win32.wglMakeCurrent(0, 0);
-        platform_win32.wglDeleteContext(platform_win32.glrc);
-        platform_win32.glrc = modern_glrc;
-        if(!platform_win32.wglMakeCurrent(platform_win32.hdc, platform_win32.glrc)) {
-            platform_set_error("failed to activate requested OpenGL context");
-            return 0;
-        }
     }
     platform_load_gl();
     platform_set_vsync(!platform.opengl.disable_vsync);
 
+    if(requested_fullscreen)
+        platform_set_fullscreen_state(1);
     platform_win32.ShowWindow(platform_win32.hwnd, PLATFORM_SW_SHOW);
     platform_win32.UpdateWindow(platform_win32.hwnd);
     platform_update_window_metrics();
     platform_win32.initialized = 1;
     QueryPerformanceCounter(&end);
-    platform.system.startup_seconds = (f32)((u64)(end.QuadPart - start.QuadPart) / (u64)platform_win32.qpc_frequency.QuadPart);
+    platform.system.startup_seconds = (f32)((f64)(end.QuadPart - start.QuadPart) / (f64)platform_win32.qpc_frequency.QuadPart);
     return 1;
 }
 
@@ -12757,16 +13152,18 @@ PLATFORM_API void platform_update(void) {
     platform.input.shift                     = platform.keys[PLATFORM_KEY_SHIFT].is_down;
     platform.input.control                   = platform.keys[PLATFORM_KEY_CONTROL].is_down;
     platform.input.alt                       = platform.keys[PLATFORM_KEY_ALT].is_down;
-    platform.extra.fps_input.wasd_movement.x = (f32)(platform.keys['w'].is_down - platform.keys['s'].is_down);
-    platform.extra.fps_input.wasd_movement.y = (f32)(platform.keys['a'].is_down - platform.keys['d'].is_down);
+    platform.extra.fps_input.wasd_movement.x = (f32)platform.keys['w'].is_down - (f32)platform.keys['s'].is_down;
+    platform.extra.fps_input.wasd_movement.y = (f32)platform.keys['a'].is_down - (f32)platform.keys['d'].is_down;
     platform.extra.fps_input.mouselook_degrees.x += platform.mouse.delta_position.x * platform.extra.fps_input.mouselook_scale;
     platform.extra.fps_input.mouselook_degrees.y += platform.mouse.delta_position.y * platform.extra.fps_input.mouselook_scale;
 
+    if((platform.window.fullscreen ? 1 : 0) != platform_win32.fullscreen_active)
+        platform_set_fullscreen_state(platform.window.fullscreen);
     platform_update_window_metrics();
     platform_update_gamepads();
     platform_update_time();
     QueryPerformanceCounter(&end);
-    platform.system.update_seconds = (f32)((u64)(end.QuadPart - start.QuadPart) / (u64)platform_win32.qpc_frequency.QuadPart);
+    platform.system.update_seconds = (f32)((f64)(end.QuadPart - start.QuadPart) / (f64)platform_win32.qpc_frequency.QuadPart);
 }
 
 PLATFORM_API void platform_swap_buffers(void) {
@@ -12788,16 +13185,30 @@ PLATFORM_API void platform_shutdown(void) {
         platform_win32.DestroyWindow(platform_win32.hwnd);
         platform_win32.hwnd = 0;
     }
-    if(platform_win32.xinput)
+    if(platform_win32.xinput) {
         FreeLibrary(platform_win32.xinput);
-    if(platform_win32.winmm)
+        platform_win32.xinput = 0;
+    }
+    if(platform_win32.winmm) {
         FreeLibrary(platform_win32.winmm);
-    if(platform_win32.opengl32)
+        platform_win32.winmm = 0;
+    }
+    if(platform_win32.shcore) {
+        FreeLibrary(platform_win32.shcore);
+        platform_win32.shcore = 0;
+    }
+    if(platform_win32.opengl32) {
         FreeLibrary(platform_win32.opengl32);
-    if(platform_win32.gdi32)
+        platform_win32.opengl32 = 0;
+    }
+    if(platform_win32.gdi32) {
         FreeLibrary(platform_win32.gdi32);
-    if(platform_win32.user32)
+        platform_win32.gdi32 = 0;
+    }
+    if(platform_win32.user32) {
         FreeLibrary(platform_win32.user32);
+        platform_win32.user32 = 0;
+    }
     platform_win32.initialized = 0;
 }
 
