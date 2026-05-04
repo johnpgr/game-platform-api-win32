@@ -3,13 +3,13 @@
 
 #include <stdio.h>
 
-typedef struct ModernGl {
+typedef struct GLContext {
     GLuint program;
     GLuint vao;
     GLuint vbo;
     GLint offset_location;
     GLint pulse_location;
-} ModernGl;
+} GLContext;
 
 PlatformApi api;
 
@@ -96,7 +96,7 @@ static GLuint create_program(void) {
     return program;
 }
 
-static int create_modern_gl(ModernGl* gl) {
+static int create_modern_gl(GLContext* gl) {
     static const GLfloat vertices[] = {
         -0.50f, -0.42f, 1.00f, 0.20f, 0.10f,
          0.50f, -0.42f, 0.10f, 0.80f, 1.00f,
@@ -143,7 +143,7 @@ static int create_modern_gl(ModernGl* gl) {
     return gl->offset_location >= 0 && gl->pulse_location >= 0;
 }
 
-static void destroy_modern_gl(ModernGl* gl) {
+static void destroy_modern_gl(GLContext* gl) {
     if(gl->vbo)
         glDeleteBuffers(1, &gl->vbo);
     if(gl->vao)
@@ -153,7 +153,7 @@ static void destroy_modern_gl(ModernGl* gl) {
 }
 
 int main(int argc, char** argv) {
-    ModernGl gl    = { 0 };
+    GLContext gl    = { 0 };
     f32 offset_x   = 0.0f;
     f32 offset_y   = 0.0f;
     f32 pulse      = 0.5f;
