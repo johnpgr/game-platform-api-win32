@@ -248,7 +248,6 @@ PLATFORM_API int platform_init(PlatformApi* api);
 PLATFORM_API void platform_update(void);
 PLATFORM_API void platform_swap_buffers(void);
 PLATFORM_API void platform_shutdown(void);
-PLATFORM_API void platform_request_quit(void);
 PLATFORM_API void platform_set_vsync(int enabled);
 PLATFORM_API void* platform_gl_proc(const char* name);
 PLATFORM_API const char* platform_error(void);
@@ -13210,10 +13209,6 @@ PLATFORM_API void platform_shutdown(void) {
         platform_win32.user32 = 0;
     }
     platform_win32.initialized = 0;
-}
-
-PLATFORM_API void platform_request_quit(void) {
-    platform.quit = 1;
 }
 
 PLATFORM_API void platform_set_vsync(int enabled) {
